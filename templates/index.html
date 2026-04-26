@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chess Elo Estimator</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --sq-light: #ffffff;
+    --sq-dark:  #4caf6e;
+    --sq-sel:   #d4f542;
+    --sq-last:  rgba(180,230,80,0.5);
+    --accent:   #2e7d32;
+    --bg:       #ffffff;
+    --border:   #d0d0d0;
+    --card:     #f5f5f5;
+    --text:     #111111;
+    --muted:    #666666;
+    --font:     'Segoe UI', system-ui, sans-serif;
+  }
+
+  body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  header { padding: 1rem 2rem; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header p  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .app { display: flex; gap: 2rem; padding: 1.5rem 2rem; flex-wrap: wrap; align-items: flex-start; }
+
+  /* Board */
+  .board-wrap { display: flex; flex-direction: column; gap: 4px; }
+  #board {
+    display: grid;
+    grid-template-columns: repeat(8, 64px);
+    grid-template-rows: repeat(8, 64px);
+    border: 2px solid #222;
+    cursor: pointer; user-select: none;
+  }
+  .sq {
+    width: 64px; height: 64px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 44px; position: relative; line-height: 1;
+  }
+  .sq-l { background: var(--sq-light); }
+  .sq-d { background: var(--sq-dark); }
+  .sq-sel   { background: var(--sq-sel) !important; }
+  .sq-last  { box-shadow: inset 0 0 0 64px var(--sq-last); }
+  .sq-check { background: #f44336 !important; }
+  .sq-legal::after {
+    content: ''; position: absolute;
+    width: 30%; height: 30%; border-radius: 50%;
+    background: rgba(0,0,0,0.18); pointer-events: none;
+  }
+
+  /* Full solid pieces */
+  .piece-w { color: #ffffff; text-shadow: 0 0 2px #000, 0 0 4px #000; }
+  .piece-b { color: #111111; }
+
+  .coords-files { display: flex; }
+  .coord-f { width: 64px; text-align: center; font-size: 11px; color: var(--muted); padding-top: 3px; }
+
+  /* Panel */
+  .panel { display: flex; flex-direction: column; gap: 1rem; min-width: 240px; flex: 1; max-width: 280px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  .btn {
+    padding: 8px 16px; font-size: 13px; font-family: var(--font);
+    border: 1px solid var(--border); border-radius: 6px;
+    background: #fff; color: var(--text); cursor: pointer; transition: background 0.1s;
+  }
+  .btn:hover { background: var(--card); }
+  .btn-green { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-green:hover { background: #245f27; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .status-box {
+    background: var(--card); border-radius: 6px;
+    padding: 12px 14px; border: 2px solid var(--border); transition: border-color 0.2s;
+  }
+  .status-box.in-check { border-color: #f44336; }
+  .status-turn { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+  .status-msg  { font-size: 13px; color: var(--muted); }
+  .status-msg.check-msg { color: #d32f2f; font-weight: 600; }
+
+  .move-log {
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px 12px; height: 150px; overflow-y: auto;
+    font-size: 13px; font-family: 'Courier New', monospace;
+  }
+  .move-pair { display: flex; gap: 8px; margin-bottom: 2px; }
+  .move-num  { min-width: 24px; color: #bbb; }
+  .move-w, .move-b { color: var(--text); min-width: 60px; }
+
+  .elo-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+  .elo-card h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+  .elo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .elo-player { background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 10px; text-align: center; }
+  .elo-color  { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .elo-num    { font-size: 24px; font-weight: 700; }
+  .elo-label  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .stats-row  { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .stat-badge { font-size: 11px; padding: 3px 8px; background: #fff; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); }
+
+  .spinner {
+    display: none; width: 16px; height: 16px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.7s linear infinite; margin: 8px auto 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Promotion */
+  .promo-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); align-items: center; justify-content: center; z-index: 100; }
+  .promo-overlay.show { display: flex; }
+  .promo-box { background: #fff; border-radius: 10px; border: 1px solid var(--border); padding: 16px; display: flex; gap: 8px; }
+  .promo-piece { width: 60px; height: 60px; font-size: 40px; cursor: pointer; display: flex; align-items: center; justify-content: center; border-radius: 8px; border: 1px solid var(--border); transition: background 0.1s; }
+  .promo-piece:hover { background: var(--card); }
+
+  /* Checkmate modal */
+  .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45); align-items: center; justify-content: center; z-index: 200; }
+  .modal-overlay.show { display: flex; }
+  .modal-box { background: #fff; border-radius: 12px; border: 1px solid var(--border); padding: 32px 36px; max-width: 380px; width: 90%; text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.12); }
+  .modal-icon   { font-size: 44px; margin-bottom: 8px; }
+  .modal-title  { font-size: 26px; font-weight: 700; margin-bottom: 4px; }
+  .modal-winner { font-size: 14px; color: var(--muted); margin-bottom: 24px; }
+  .modal-elo-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .modal-elo-box { background: var(--card); border-radius: 8px; padding: 14px 10px; border: 1px solid var(--border); }
+  .modal-elo-side  { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .modal-elo-num   { font-size: 34px; font-weight: 700; }
+  .modal-elo-label { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: center; }
+  .modal-btn { padding: 10px 24px; font-size: 14px; font-family: var(--font); border: none; border-radius: 6px; cursor: pointer; }
+  .modal-btn-primary { background: var(--accent); color: #fff; }
+  .modal-btn-primary:hover { background: #245f27; }
+  .modal-btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
+  .modal-btn-secondary:hover { background: #e8e8e8; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Chess Elo Estimator</h1>
+  <p>Play a game — your move patterns predict your Elo</p>
+</header>
+
+<div class="app">
+  <div class="board-wrap">
+    <div id="board"></div>
+    <div class="coords-files">
+      <div class="coord-f">a</div><div class="coord-f">b</div>
+      <div class="coord-f">c</div><div class="coord-f">d</div>
+      <div class="coord-f">e</div><div class="coord-f">f</div>
+      <div class="coord-f">g</div><div class="coord-f">h</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="controls">
+      <button class="btn btn-green" onclick="resetGame()">New Game</button>
+      <button class="btn" onclick="undoMove()">Undo</button>
+      <button class="btn" id="btn-estimate" onclick="estimateElo()">Estimate Elo</button>
+    </div>
+
+    <div class="status-box" id="status-box">
+      <div class="status-turn" id="status-turn">White to move</div>
+      <div class="status-msg"  id="status-msg">Click a piece to start</div>
+    </div>
+
+    <div class="move-log" id="move-log">
+      <span style="color:#bbb;font-size:12px">Moves appear here...</span>
+    </div>
+
+    <div class="elo-card">
+      <h2>Elo Estimate</h2>
+      <div class="elo-grid">
+        <div class="elo-player">
+          <div class="elo-color">White</div>
+          <div class="elo-num" id="elo-w">—</div>
+          <div class="elo-label" id="elo-w-lbl">Not estimated</div>
+        </div>
+        <div class="elo-player">
+          <div class="elo-color">Black</div>
+          <div class="elo-num" id="elo-b">—</div>
+          <div class="elo-label" id="elo-b-lbl">Not estimated</div>
+        </div>
+      </div>
+      <div id="spinner" class="spinner"></div>
+      <div class="stats-row" id="stats-row"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Promotion picker -->
+<div class="promo-overlay" id="promo-overlay">
+  <div class="promo-box" id="promo-box"></div>
+</div>
+
+<!-- Checkmate / game-end modal -->
+<div class="modal-overlay" id="end-modal">
+  <div class="modal-box">
+    <div class="modal-icon"   id="modal-icon">♚</div>
+    <div class="modal-title"  id="modal-title">Checkmate!</div>
+    <div class="modal-winner" id="modal-winner">White wins</div>
+    <div class="modal-elo-grid">
+      <div class="modal-elo-box">
+        <div class="modal-elo-side">White Elo</div>
+        <div class="modal-elo-num"   id="modal-elo-w">—</div>
+        <div class="modal-elo-label" id="modal-elo-w-lbl"></div>
+      </div>
+      <div class="modal-elo-box">
+        <div class="modal-elo-side">Black Elo</div>
+        <div class="modal-elo-num"   id="modal-elo-b">—</div>
+        <div class="modal-elo-label" id="modal-elo-b-lbl"></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn-primary"   onclick="resetGame()">Play Again</button>
+      <button class="modal-btn modal-btn-secondary" onclick="closeModal()">Review</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const GLYPHS = {
+  wP:'♙', wR:'♖', wN:'♘', wB:'♗', wQ:'♕', wK:'♔',
+  bP:'♟', bR:'♜', bN:'♞', bB:'♝', bQ:'♛', bK:'♚'
+};
+
+let board=[], selected=null, turn='w', gameOver=false;
+let moveHistory=[], boardHistory=[];
+let lastFrom=-1, lastTo=-1, pendingPromo=null;
+let stats={
+  wCaptures:0,wChecks:0,wCastled:false,wPromotions:0,wMoves:0,wPieceTypes:0,
+  bCaptures:0,bChecks:0,bCastled:false,bPromotions:0,bMoves:0,bPieceTypes:0,
+  totalMoves:0,wPieceSet:new Set(),bPieceSet:new Set()
+};
+
+const sq  = (r,c) => r*8+c;
+const row = i     => Math.floor(i/8);
+const col = i     => i%8;
+const inB = (r,c) => r>=0&&r<8&&c>=0&&c<8;
+const pc  = p     => p?p[0]:null;
+const pt  = p     => p?p[1]:null;
+
+function initBoard(){
+  board=Array(64).fill(null);
+  const back=['R','N','B','Q','K','B','N','R'];
+  for(let i=0;i<8;i++){
+    board[i]='b'+back[i]; board[8+i]='bP';
+    board[48+i]='wP'; board[56+i]='w'+back[i];
+  }
+}
+
+function resetGame(){
+  initBoard();
+  selected=null; turn='w'; gameOver=false;
+  moveHistory=[]; boardHistory=[]; lastFrom=-1; lastTo=-1; pendingPromo=null;
+  stats={wCaptures:0,wChecks:0,wCastled:false,wPromotions:0,wMoves:0,wPieceTypes:0,
+         bCaptures:0,bChecks:0,bCastled:false,bPromotions:0,bMoves:0,bPieceTypes:0,
+         totalMoves:0,wPieceSet:new Set(),bPieceSet:new Set()};
+  document.getElementById('elo-w').textContent='—';
+  document.getElementById('elo-b').textContent='—';
+  document.getElementById('elo-w-lbl').textContent='Not estimated';
+  document.getElementById('elo-b-lbl').textContent='Not estimated';
+  document.getElementById('stats-row').innerHTML='';
+  document.getElementById('spinner').style.display='none';
+  document.getElementById('move-log').innerHTML='<span style="color:#bbb;font-size:12px">Moves appear here...</span>';
+  document.getElementById('promo-overlay').classList.remove('show');
+  document.getElementById('end-modal').classList.remove('show');
+  setStatus('White to move','Click a piece to start',false);
+  render();
+}
+
+function closeModal(){
+  document.getElementById('end-modal').classList.remove('show');
+}
+
+function isAttacked(idx,byColor,b){
+  const r=row(idx),c=col(idx);
+  for(const [dr,dc] of [[-1,0],[1,0],[0,-1],[0,1],[-1,-1],[-1,1],[1,-1],[1,1]]){
+    let nr=r+dr,nc=c+dc;
+    while(inB(nr,nc)){
+      const p=b[sq(nr,nc)];
+      if(p){
+        if(pc(p)===byColor){
+          const t=pt(p);
+          if(t==='Q') return true;
+          if(t==='R'&&(dr===0||dc===0)) return true;
+          if(t==='B'&&dr!==0&&dc!==0)   return true;
+          if(t==='K'&&Math.abs(nr-r)<=1&&Math.abs(nc-c)<=1) return true;
+        }
+        break;
+      }
+      nr+=dr; nc+=dc;
+    }
+  }
+  for(const [dr,dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]){
+    const nr=r+dr,nc=c+dc;
+    if(inB(nr,nc)&&b[sq(nr,nc)]&&pc(b[sq(nr,nc)])===byColor&&pt(b[sq(nr,nc)])==='N') return true;
+  }
+  const pd=byColor==='w'?1:-1;
+  for(const dc of[-1,1]){
+    const nr=r+pd,nc=c+dc;
+    if(inB(nr,nc)&&b[sq(nr,nc)]&&pc(b[sq(nr,nc)])===byColor&&pt(b[sq(nr,nc)])==='P') return true;
+  }
+  return false;
+}
+
+function findKing(color,b){ for(let i=0;i<64;i++) if(b[i]===color+'K') return i; return -1; }
+function inCheck(color,b){ const k=findKing(color,b); return k>=0&&isAttacked(k,color==='w'?'b':'w',b); }
+
+function getPseudo(from,b,t){
+  const moves=[],p=b[from]; if(!p) return moves;
+  const typ=pt(p),r=row(from),c=col(from),opp=t==='w'?'b':'w';
+  if(typ==='P'){
+    const dir=t==='w'?-1:1,nr=r+dir;
+    if(inB(nr,c)&&!b[sq(nr,c)]){
+      moves.push(sq(nr,c));
+      if(r===(t==='w'?6:1)&&!b[sq(r+dir*2,c)]) moves.push(sq(r+dir*2,c));
+    }
+    for(const dc of[-1,1]){
+      if(inB(nr,c+dc)&&b[sq(nr,c+dc)]&&pc(b[sq(nr,c+dc)])===opp) moves.push(sq(nr,c+dc));
+    }
+  } else if(typ==='N'){
+    for(const [dr,dc] of [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]]){
+      const nr=r+dr,nc=c+dc;
+      if(inB(nr,nc)&&pc(b[sq(nr,nc)])!==t) moves.push(sq(nr,nc));
+    }
+  } else if(typ==='K'){
+    for(const [dr,dc] of [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]]){
+      const nr=r+dr,nc=c+dc;
+      if(inB(nr,nc)&&pc(b[sq(nr,nc)])!==t) moves.push(sq(nr,nc));
+    }
+    if(t==='w'&&from===60){
+      if(!b[61]&&!b[62]&&b[63]==='wR'&&!isAttacked(60,'b',b)&&!isAttacked(61,'b',b)&&!isAttacked(62,'b',b)) moves.push(62);
+      if(!b[59]&&!b[58]&&!b[57]&&b[56]==='wR'&&!isAttacked(60,'b',b)&&!isAttacked(59,'b',b)) moves.push(58);
+    }
+    if(t==='b'&&from===4){
+      if(!b[5]&&!b[6]&&b[7]==='bR'&&!isAttacked(4,'w',b)&&!isAttacked(5,'w',b)&&!isAttacked(6,'w',b)) moves.push(6);
+      if(!b[3]&&!b[2]&&!b[1]&&b[0]==='bR'&&!isAttacked(4,'w',b)&&!isAttacked(3,'w',b)) moves.push(2);
+    }
+  } else {
+    const dirs=[];
+    if(typ==='R'||typ==='Q') dirs.push([-1,0],[1,0],[0,-1],[0,1]);
+    if(typ==='B'||typ==='Q') dirs.push([-1,-1],[-1,1],[1,-1],[1,1]);
+    for(const [dr,dc] of dirs){
+      let nr=r+dr,nc=c+dc;
+      while(inB(nr,nc)){
+        const tgt=b[sq(nr,nc)];
+        if(!tgt) moves.push(sq(nr,nc));
+        else { if(pc(tgt)===opp) moves.push(sq(nr,nc)); break; }
+        nr+=dr; nc+=dc;
+      }
+    }
+  }
+  return moves;
+}
+
+function getLegal(from,b,t){
+  return getPseudo(from,b,t).filter(to=>{
+    const nb=[...b]; nb[to]=nb[from]; nb[from]=null;
+    return !inCheck(t,nb);
+  });
+}
+
+function hasAnyLegal(color,b){
+  for(let i=0;i<64;i++) if(pc(b[i])===color&&getLegal(i,b,color).length>0) return true;
+  return false;
+}
+
+function toSAN(from,to,b,t,promo){
+  const files='abcdefgh';
+  const typ=pt(b[from]);
+  const tc=files[col(to)],tr=8-row(to),fc=files[col(from)];
+  const cap=!!b[to];
+  if(typ==='P'){ let s=cap?fc+'x'+tc+tr:tc+tr; if(promo)s+='='+promo; return s; }
+  if(typ==='K'&&Math.abs(col(to)-col(from))===2) return col(to)>col(from)?'O-O':'O-O-O';
+  return typ+(cap?'x':'')+tc+tr;
+}
+
+function makeMove(from,to,promo){
+  boardHistory.push([...board]);
+  const t=turn,typ=pt(board[from]),cap=!!board[to];
+  const san=toSAN(from,to,board,t,promo);
+
+  if(cap){ t==='w'?stats.wCaptures++:stats.bCaptures++; }
+  if(t==='w'){ stats.wMoves++; stats.wPieceSet.add(typ); }
+  else        { stats.bMoves++; stats.bPieceSet.add(typ); }
+
+  board[to]=board[from]; board[from]=null;
+
+  if(typ==='K'&&Math.abs(col(to)-col(from))===2){
+    if(col(to)===6){ board[row(to)*8+5]=board[row(to)*8+7]; board[row(to)*8+7]=null; }
+    else           { board[row(to)*8+3]=board[row(to)*8];   board[row(to)*8]=null; }
+    t==='w'?stats.wCastled=true:stats.bCastled=true;
+  }
+  if(typ==='P'&&promo){ board[to]=t+promo; t==='w'?stats.wPromotions++:stats.bPromotions++; }
+
+  const opp=t==='w'?'b':'w';
+  const oppInCheck=inCheck(opp,board);
+  if(oppInCheck){ t==='w'?stats.wChecks++:stats.bChecks++; }
+
+  stats.wPieceTypes=stats.wPieceSet.size;
+  stats.bPieceTypes=stats.bPieceSet.size;
+
+  lastFrom=from; lastTo=to;
+  moveHistory.push(san);
+  turn=opp; selected=null;
+  updateLog();
+
+  if(!hasAnyLegal(opp,board)){
+    gameOver=true;
+    const isMate=inCheck(opp,board);
+    const winner=t==='w'?'White':'Black';
+    setStatus('Game over', isMate?`${winner} wins by checkmate`:'Stalemate — draw', false);
+    render();
+    showEndModal(winner, isMate);
+  } else {
+    setStatus(`${opp==='w'?'White':'Black'} to move`, oppInCheck?'Check!':'', oppInCheck);
+    render(oppInCheck ? findKing(opp,board) : -1);
+  }
+}
+
+function undoMove(){
+  if(!boardHistory.length||gameOver) return;
+  board=boardHistory.pop(); moveHistory.pop();
+  turn=turn==='w'?'b':'w'; lastFrom=-1; lastTo=-1; selected=null; gameOver=false;
+  updateLog();
+  setStatus(`${turn==='w'?'White':'Black'} to move`,'',false);
+  render();
+}
+
+function updateLog(){
+  const el=document.getElementById('move-log');
+  if(!moveHistory.length){ el.innerHTML='<span style="color:#bbb;font-size:12px">Moves appear here...</span>'; return; }
+  let html='';
+  for(let i=0;i<moveHistory.length;i+=2)
+    html+=`<div class="move-pair"><span class="move-num">${Math.floor(i/2)+1}.</span><span class="move-w">${moveHistory[i]}</span><span class="move-b">${moveHistory[i+1]||''}</span></div>`;
+  el.innerHTML=html; el.scrollTop=el.scrollHeight;
+}
+
+function setStatus(t,m,isCheck){
+  document.getElementById('status-turn').textContent=t;
+  const msgEl=document.getElementById('status-msg');
+  msgEl.textContent=m;
+  msgEl.className='status-msg'+(isCheck?' check-msg':'');
+  document.getElementById('status-box').className='status-box'+(isCheck?' in-check':'');
+}
+
+function handleClick(idx){
+  if(gameOver||pendingPromo!==null) return;
+  const p=board[idx];
+  if(selected===null){
+    if(p&&pc(p)===turn){ const legal=getLegal(idx,board,turn); if(legal.length>0){ selected=idx; render(); } }
+  } else {
+    const legal=getLegal(selected,board,turn);
+    if(legal.includes(idx)){
+      const isPromo=pt(board[selected])==='P'&&((turn==='w'&&row(idx)===0)||(turn==='b'&&row(idx)===7));
+      if(isPromo) showPromo(selected,idx);
+      else        makeMove(selected,idx,null);
+    } else if(p&&pc(p)===turn&&idx!==selected){
+      const l2=getLegal(idx,board,turn); selected=l2.length>0?idx:null; render();
+    } else { selected=null; render(); }
+  }
+}
+
+function showPromo(from,to){
+  pendingPromo={from,to};
+  const box=document.getElementById('promo-box');
+  const options=turn==='w'
+    ?[['Q','♕'],['R','♖'],['B','♗'],['N','♘']]
+    :[['Q','♛'],['R','♜'],['B','♝'],['N','♞']];
+  box.innerHTML='';
+  options.forEach(([pp,glyph])=>{
+    const d=document.createElement('div');
+    d.className='promo-piece';
+    const span=document.createElement('span');
+    span.className='piece-'+turn;
+    span.textContent=glyph;
+    d.appendChild(span);
+    d.onclick=()=>{
+      document.getElementById('promo-overlay').classList.remove('show');
+      const pr=pendingPromo; pendingPromo=null; makeMove(pr.from,pr.to,pp);
+    };
+    box.appendChild(d);
+  });
+  document.getElementById('promo-overlay').classList.add('show');
+}
+
+function render(checkKingIdx=-1){
+  const el=document.getElementById('board'); el.innerHTML='';
+  const legal=selected!==null?getLegal(selected,board,turn):[];
+  for(let i=0;i<64;i++){
+    const r=row(i),c=col(i),div=document.createElement('div');
+    let cls='sq '+(((r+c)%2===0)?'sq-l':'sq-d');
+    if(i===checkKingIdx)            cls='sq sq-check';
+    else if(i===selected)           cls='sq sq-sel';
+    else if(i===lastFrom||i===lastTo) cls+=' sq-last';
+    div.className=cls;
+    if(legal.includes(i)) div.classList.add('sq-legal');
+    if(board[i]){
+      const span=document.createElement('span');
+      span.className='piece-'+board[i][0];
+      span.textContent=GLYPHS[board[i]]||'';
+      div.appendChild(span);
+    }
+    div.addEventListener('click',()=>handleClick(i));
+    el.appendChild(div);
+  }
+}
+
+async function estimateElo(silent=false){
+  if(stats.wMoves<5){
+    if(!silent) setStatus(document.getElementById('status-turn').textContent,'Play at least 5 moves first',false);
+    return null;
+  }
+  const btn=document.getElementById('btn-estimate');
+  const spinner=document.getElementById('spinner');
+  if(!silent){ btn.disabled=true; spinner.style.display='block'; }
+  document.getElementById('stats-row').innerHTML='';
+
+  let resultEncoded=0.5;
+  if(gameOver){
+    const lastTurn=turn==='w'?'b':'w';
+    if(inCheck(turn,board)) resultEncoded=lastTurn==='w'?1:0;
+  }
+
+  const payload={
+    stats:{
+      totalMoves:moveHistory.length,
+      wMoves:stats.wMoves, wCaptures:stats.wCaptures, wChecks:stats.wChecks,
+      wCastled:stats.wCastled, wPromotions:stats.wPromotions, wPieceTypes:stats.wPieceTypes,
+      bMoves:stats.bMoves, bCaptures:stats.bCaptures, bChecks:stats.bChecks,
+      bCastled:stats.bCastled, bPromotions:stats.bPromotions, bPieceTypes:stats.bPieceTypes,
+    },
+    result_encoded:resultEncoded
+  };
+
+  // Local Elo estimator — capped at 800
+  function calcLocalElo(moves, captures, checks, castled, promotions, pieceTypes){
+    let score = 400;
+    score += Math.min(moves * 2, 80);
+    score += Math.min(captures * 8, 80);
+    score += Math.min(checks * 12, 60);
+    if(castled) score += 40;
+    score += Math.min(promotions * 20, 40);
+    score += Math.min((pieceTypes - 1) * 15, 60);
+    score = Math.max(400, Math.min(800, Math.round(score)));
+    const label = score < 500 ? 'Beginner' : score < 650 ? 'Novice' : 'Casual';
+    return { elo: score, label };
+  }
+
+  try {
+    const res=await fetch('/api/estimate-elo',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error(`Server error ${res.status}`);
+    const data=await res.json();
+
+    // Cap server response at 800
+    data.white.elo = Math.min(800, data.white.elo);
+    data.black.elo = Math.min(800, data.black.elo);
+
+    document.getElementById('elo-w').textContent=data.white.elo;
+    document.getElementById('elo-b').textContent=data.black.elo;
+    document.getElementById('elo-w-lbl').textContent=data.white.label;
+    document.getElementById('elo-b-lbl').textContent=data.black.label;
+    if(!silent){
+      document.getElementById('stats-row').innerHTML=`
+        <div class="stat-badge">Captures W:${stats.wCaptures} B:${stats.bCaptures}</div>
+        <div class="stat-badge">Checks W:${stats.wChecks} B:${stats.bChecks}</div>
+        <div class="stat-badge">Castled: ${stats.wCastled?'W':'-'} ${stats.bCastled?'B':'-'}</div>
+        <div class="stat-badge">Total moves: ${moveHistory.length}</div>
+      `;
+    }
+    return data;
+  } catch(err){
+    // Server unreachable — use local estimator
+    const wLocal = calcLocalElo(stats.wMoves, stats.wCaptures, stats.wChecks, stats.wCastled, stats.wPromotions, stats.wPieceTypes);
+    const bLocal = calcLocalElo(stats.bMoves, stats.bCaptures, stats.bChecks, stats.bCastled, stats.bPromotions, stats.bPieceTypes);
+    const fallback = { white: wLocal, black: bLocal };
+    document.getElementById('elo-w').textContent=wLocal.elo;
+    document.getElementById('elo-b').textContent=bLocal.elo;
+    document.getElementById('elo-w-lbl').textContent=wLocal.label;
+    document.getElementById('elo-b-lbl').textContent=bLocal.label;
+    if(!silent){
+      document.getElementById('stats-row').innerHTML=`
+        <div class="stat-badge">Captures W:${stats.wCaptures} B:${stats.bCaptures}</div>
+        <div class="stat-badge">Checks W:${stats.wChecks} B:${stats.bChecks}</div>
+        <div class="stat-badge">Castled: ${stats.wCastled?'W':'-'} ${stats.bCastled?'B':'-'}</div>
+        <div class="stat-badge">Total moves: ${moveHistory.length}</div>
+      `;
+    }
+    return fallback;
+  } finally {
+    if(!silent){ btn.disabled=false; spinner.style.display='none'; }
+  }
+}
+
+async function showEndModal(winner, isMate){
+  await new Promise(r=>setTimeout(r,350));
+
+  document.getElementById('modal-title').textContent  = isMate ? 'Checkmate!' : 'Stalemate';
+  document.getElementById('modal-winner').textContent = isMate ? `${winner} wins` : 'The game is a draw';
+  document.getElementById('modal-icon').textContent   = isMate ? (winner==='White'?'♔':'♚') : '½';
+
+  const data = await estimateElo(true);
+
+  document.getElementById('modal-elo-w').textContent     = data ? data.white.elo   : document.getElementById('elo-w').textContent;
+  document.getElementById('modal-elo-b').textContent     = data ? data.black.elo   : document.getElementById('elo-b').textContent;
+  document.getElementById('modal-elo-w-lbl').textContent = data ? data.white.label : document.getElementById('elo-w-lbl').textContent;
+  document.getElementById('modal-elo-b-lbl').textContent = data ? data.black.label : document.getElementById('elo-b-lbl').textContent;
+
+  document.getElementById('end-modal').classList.add('show');
+}
+
+resetGame();
+</script>
+</body>
+</html>
