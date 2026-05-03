@@ -1,15 +1,3 @@
-"""
-train.py
-Run this once to train the Elo models from your PGN file and save them.
-
-Usage:
-    python train.py --pgn data.pgn
-
-Output:
-    models/model_white.joblib
-    models/model_black.joblib
-"""
-
 import argparse
 import os
 import chess.pgn

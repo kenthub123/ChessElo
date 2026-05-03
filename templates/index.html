@@ -9,11 +9,11 @@
 
   :root {
     --sq-light: #ffffff;
-    --sq-dark:  #4caf6e;
+    --sq-dark:  #ffb8d9;
     --sq-sel:   #d4f542;
     --sq-last:  rgba(180,230,80,0.5);
     --accent:   #2e7d32;
-    --bg:       #ffffff;
+    --bg:       #B3E1F8;
     --border:   #d0d0d0;
     --card:     #f5f5f5;
     --text:     #111111;
@@ -139,8 +139,8 @@
 <body>
 
 <header>
-  <h1>Chess Elo Estimator</h1>
-  <p>Play a game — your move patterns predict your Elo</p>
+  <h1>Finding ELO</h1>
+  <p>Created by:Alvin, Rodson, Jabez, Kent</p>
 </header>
 
 <div class="app">
@@ -536,63 +536,50 @@ async function estimateElo(silent=false){
     result_encoded:resultEncoded
   };
 
-  // Local Elo estimator — capped at 800
-  function calcLocalElo(moves, captures, checks, castled, promotions, pieceTypes){
-    let score = 400;
-    score += Math.min(moves * 2, 80);
-    score += Math.min(captures * 8, 80);
-    score += Math.min(checks * 12, 60);
-    if(castled) score += 40;
-    score += Math.min(promotions * 20, 40);
-    score += Math.min((pieceTypes - 1) * 15, 60);
-    score = Math.max(400, Math.min(800, Math.round(score)));
-    const label = score < 500 ? 'Beginner' : score < 650 ? 'Novice' : 'Casual';
-    return { elo: score, label };
+  function showStats(){ if(!silent) document.getElementById('stats-row').innerHTML=`
+    <div class="stat-badge">Captures W:${stats.wCaptures} B:${stats.bCaptures}</div>
+    <div class="stat-badge">Checks W:${stats.wChecks} B:${stats.bChecks}</div>
+    <div class="stat-badge">Castled: ${stats.wCastled?'W':'-'} ${stats.bCastled?'B':'-'}</div>
+    <div class="stat-badge">Total moves: ${moveHistory.length}</div>
+  `; }
+
+  function displayElo(w, b){
+    document.getElementById('elo-w').textContent=w.elo;
+    document.getElementById('elo-b').textContent=b.elo;
+    document.getElementById('elo-w-lbl').textContent=w.label;
+    document.getElementById('elo-b-lbl').textContent=b.label;
+  }
+
+  // Local estimator used when server is unreachable — no cap
+  function localElo(moves, captures, checks, castled, promotions, pieceTypes){
+    let s = 600;
+    s += moves * 3;
+    s += captures * 10;
+    s += checks * 15;
+    if(castled) s += 50;
+    s += promotions * 25;
+    s += (pieceTypes - 1) * 20;
+    s = Math.max(400, Math.round(s));
+    const label = s < 800 ? 'Beginner' : s < 1000 ? 'Novice' : s < 1200 ? 'Casual' : s < 1500 ? 'Intermediate' : 'Advanced';
+    return { elo: s, label };
   }
 
   try {
-    const res=await fetch('/api/estimate-elo',{
+    const res = await fetch('/api/estimate-elo', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
     });
     if(!res.ok) throw new Error(`Server error ${res.status}`);
-    const data=await res.json();
-
-    // Cap server response at 800
-    data.white.elo = Math.min(800, data.white.elo);
-    data.black.elo = Math.min(800, data.black.elo);
-
-    document.getElementById('elo-w').textContent=data.white.elo;
-    document.getElementById('elo-b').textContent=data.black.elo;
-    document.getElementById('elo-w-lbl').textContent=data.white.label;
-    document.getElementById('elo-b-lbl').textContent=data.black.label;
-    if(!silent){
-      document.getElementById('stats-row').innerHTML=`
-        <div class="stat-badge">Captures W:${stats.wCaptures} B:${stats.bCaptures}</div>
-        <div class="stat-badge">Checks W:${stats.wChecks} B:${stats.bChecks}</div>
-        <div class="stat-badge">Castled: ${stats.wCastled?'W':'-'} ${stats.bCastled?'B':'-'}</div>
-        <div class="stat-badge">Total moves: ${moveHistory.length}</div>
-      `;
-    }
+    const data = await res.json();
+    displayElo(data.white, data.black);
+    showStats();
     return data;
   } catch(err){
-    // Server unreachable — use local estimator
-    const wLocal = calcLocalElo(stats.wMoves, stats.wCaptures, stats.wChecks, stats.wCastled, stats.wPromotions, stats.wPieceTypes);
-    const bLocal = calcLocalElo(stats.bMoves, stats.bCaptures, stats.bChecks, stats.bCastled, stats.bPromotions, stats.bPieceTypes);
-    const fallback = { white: wLocal, black: bLocal };
-    document.getElementById('elo-w').textContent=wLocal.elo;
-    document.getElementById('elo-b').textContent=bLocal.elo;
-    document.getElementById('elo-w-lbl').textContent=wLocal.label;
-    document.getElementById('elo-b-lbl').textContent=bLocal.label;
-    if(!silent){
-      document.getElementById('stats-row').innerHTML=`
-        <div class="stat-badge">Captures W:${stats.wCaptures} B:${stats.bCaptures}</div>
-        <div class="stat-badge">Checks W:${stats.wChecks} B:${stats.bChecks}</div>
-        <div class="stat-badge">Castled: ${stats.wCastled?'W':'-'} ${stats.bCastled?'B':'-'}</div>
-        <div class="stat-badge">Total moves: ${moveHistory.length}</div>
-      `;
-    }
-    return fallback;
+    const w = localElo(stats.wMoves, stats.wCaptures, stats.wChecks, stats.wCastled, stats.wPromotions, stats.wPieceTypes);
+    const b = localElo(stats.bMoves, stats.bCaptures, stats.bChecks, stats.bCastled, stats.bPromotions, stats.bPieceTypes);
+    displayElo(w, b);
+    showStats();
+    return { white: w, black: b };
   } finally {
     if(!silent){ btn.disabled=false; spinner.style.display='none'; }
   }
