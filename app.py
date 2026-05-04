@@ -50,7 +50,7 @@ def elo_label(elo):
     if elo < 1500: return "Club player"
     if elo < 1800: return "Advanced"
     if elo < 2000: return "Expert"
-    return "Master"
+    return "Dude Are you Magnus Carlsen?"
 
 
 @app.route("/api/estimate-elo", methods=["POST"])
